@@ -6,6 +6,7 @@ import (
 	"claude-squad/session/tmux"
 	"path/filepath"
 
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -218,8 +219,15 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 	if !firstTimeSetup {
 		// Reuse existing session
 		if err := tmuxSession.Restore(); err != nil {
-			setupErr = fmt.Errorf("failed to restore existing session: %w", err)
-			return setupErr
+			if errors.Is(err, tmux.ErrSessionNotExist) {
+				if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+					setupErr = fmt.Errorf("failed to start new session: %w", err)
+					return setupErr
+				}
+			} else {
+				setupErr = fmt.Errorf("failed to restore existing session: %w", err)
+				return setupErr
+			}
 		}
 	} else {
 		// Setup git worktree first
