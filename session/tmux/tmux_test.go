@@ -88,3 +88,24 @@ func TestStartTmuxSession(t *testing.T) {
 	_, err = ptyFactory.files[1].Stat()
 	require.NoError(t, err)
 }
+
+func TestRestoreMissingSession(t *testing.T) {
+	skipTmuxCheck = true
+	defer func() { skipTmuxCheck = false }()
+
+	ptyFactory := NewMockPtyFactory(t)
+	cmdExec := cmd_test.MockCmdExec{
+		RunFunc: func(cmd *exec.Cmd) error {
+			if strings.Contains(cmd.String(), "has-session") {
+				return fmt.Errorf("session missing")
+			}
+			return nil
+		},
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return nil, nil },
+	}
+
+	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+	err := session.Restore()
+	require.ErrorIs(t, err, ErrSessionNotExist)
+	require.Equal(t, 0, len(ptyFactory.cmds))
+}

@@ -58,6 +58,10 @@ type TmuxSession struct {
 
 const TmuxPrefix = "claudesquad_"
 
+// ErrSessionNotExist is returned when Restore is called for a session that does
+// not exist.
+var ErrSessionNotExist = errors.New("tmux session does not exist")
+
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
 func toClaudeSquadTmuxName(str string) string {
@@ -166,6 +170,10 @@ func (t *TmuxSession) Start(workDir string) error {
 func (t *TmuxSession) Restore() error {
 	if err := checkTmux(); err != nil {
 		return err
+	}
+
+	if !t.DoesSessionExist() {
+		return ErrSessionNotExist
 	}
 
 	cmd := exec.Command("tmux", "attach-session", "-t", t.sanitizedName)
