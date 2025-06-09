@@ -2,7 +2,10 @@ package tmux
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+
+	"claude-squad/log"
 )
 
 // skipTmuxCheck can be set in tests to bypass the tmux presence check.
@@ -13,8 +16,16 @@ func checkTmux() error {
 	if skipTmuxCheck {
 		return nil
 	}
-	if _, err := exec.LookPath("tmux"); err != nil {
+	pathEnv := os.Getenv("PATH")
+	tmuxPath, err := exec.LookPath("tmux")
+	if err != nil {
+		if log.ErrorLog != nil {
+			log.ErrorLog.Printf("tmux not found in PATH: %s", pathEnv)
+		}
 		return fmt.Errorf("tmux is not installed or not in PATH: %w", err)
+	}
+	if log.InfoLog != nil {
+		log.InfoLog.Printf("tmux found at %s (PATH=%s)", tmuxPath, pathEnv)
 	}
 	return nil
 }
