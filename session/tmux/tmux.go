@@ -94,6 +94,9 @@ func (t *TmuxSession) Start(workDir string) error {
 
 	// Create a new detached tmux session and start claude in it
 	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	if log.InfoLog != nil {
+		log.InfoLog.Printf("starting tmux session with PATH=%s cmd=%s", os.Getenv("PATH"), cmd.String())
+	}
 
 	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {
@@ -164,7 +167,11 @@ func (t *TmuxSession) Restore() error {
 	if err := checkTmux(); err != nil {
 		return err
 	}
-	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.sanitizedName))
+	cmd := exec.Command("tmux", "attach-session", "-t", t.sanitizedName)
+	if log.InfoLog != nil {
+		log.InfoLog.Printf("restoring tmux session with PATH=%s cmd=%s", os.Getenv("PATH"), cmd.String())
+	}
+	ptmx, err := t.ptyFactory.Start(cmd)
 	if err != nil {
 		return fmt.Errorf("error opening PTY: %w", err)
 	}
