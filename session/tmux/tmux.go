@@ -178,7 +178,7 @@ func (t *TmuxSession) Restore() error {
 
 	cmd := exec.Command("tmux", "attach-session", "-t", t.sanitizedName)
 	if log.InfoLog != nil {
-		log.InfoLog.Printf("restoring tmux session with PATH=%s cmd=%s", os.Getenv("PATH"), cmd.String())
+		log.InfoLog.Printf("restoring tmux session with cmd=%s", cmd.String())
 	}
 	ptmx, err := t.ptyFactory.Start(cmd)
 

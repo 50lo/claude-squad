@@ -25,7 +25,7 @@ func checkTmux() error {
 		return fmt.Errorf("tmux is not installed or not in PATH: %w", err)
 	}
 	if log.InfoLog != nil {
-		log.InfoLog.Printf("tmux found at %s (PATH=%s)", tmuxPath, pathEnv)
+		log.InfoLog.Printf("tmux found at %s", tmuxPath)
 	}
 	return nil
 }
