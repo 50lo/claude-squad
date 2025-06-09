@@ -50,6 +50,8 @@ func TestSanitizeName(t *testing.T) {
 }
 
 func TestStartTmuxSession(t *testing.T) {
+	skipTmuxCheck = true
+	defer func() { skipTmuxCheck = false }()
 	ptyFactory := NewMockPtyFactory(t)
 
 	created := false

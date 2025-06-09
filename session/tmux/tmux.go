@@ -83,6 +83,10 @@ func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec 
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
 // the session (ex. claude). workdir is the git worktree directory.
 func (t *TmuxSession) Start(workDir string) error {
+	// Ensure tmux is installed before attempting to start a session
+	if err := checkTmux(); err != nil {
+		return err
+	}
 	// Check if the session already exists
 	if t.DoesSessionExist() {
 		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
@@ -157,6 +161,9 @@ func (t *TmuxSession) Start(workDir string) error {
 
 // Restore attaches to an existing session and restores the window size
 func (t *TmuxSession) Restore() error {
+	if err := checkTmux(); err != nil {
+		return err
+	}
 	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.sanitizedName))
 	if err != nil {
 		return fmt.Errorf("error opening PTY: %w", err)
