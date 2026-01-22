@@ -2,6 +2,7 @@
 
 [Claude Squad](https://smtg-ai.github.io/claude-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
 
+> **Fork Status:** Last synced with [upstream](https://github.com/smtg-ai/claude-squad) on 2026-01-22
 
 ![Claude Squad Screenshot](assets/screenshot.png)
 
