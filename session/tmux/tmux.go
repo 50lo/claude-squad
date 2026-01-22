@@ -22,6 +22,7 @@ import (
 const ProgramClaude = "claude"
 
 const ProgramAider = "aider"
+const ProgramGemini = "gemini"
 
 // TmuxSession represents a managed tmux session
 type TmuxSession struct {
@@ -75,6 +76,11 @@ func NewTmuxSession(name string, program string) *TmuxSession {
 	return newTmuxSession(name, program, MakePtyFactory(), cmd.MakeExecutor())
 }
 
+// NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.
+func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
+	return newTmuxSession(name, program, ptyFactory, cmdExec)
+}
+
 func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
 	return &TmuxSession{
 		sanitizedName: toClaudeSquadTmuxName(name),
@@ -114,22 +120,37 @@ func (t *TmuxSession) Start(workDir string) error {
 		return fmt.Errorf("error starting tmux session: %w", err)
 	}
 
-	// We need to close the ptmx, but we shouldn't close it before the command above finishes.
-	// So, we poll for completion before closing.
+	// Poll for session existence with exponential backoff
 	timeout := time.After(2 * time.Second)
+	sleepDuration := 5 * time.Millisecond
 	for !t.DoesSessionExist() {
 		select {
 		case <-timeout:
-			// Cleanup on window size update failure
 			if cleanupErr := t.Close(); cleanupErr != nil {
 				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 			}
 			return fmt.Errorf("timed out waiting for tmux session %s: %v", t.sanitizedName, err)
 		default:
-			time.Sleep(time.Millisecond * 10)
+			time.Sleep(sleepDuration)
+			// Exponential backoff up to 50ms max
+			if sleepDuration < 50*time.Millisecond {
+				sleepDuration *= 2
+			}
 		}
 	}
 	ptmx.Close()
+
+	// Set history limit to enable scrollback (default is 2000, we'll use 10000 for more history)
+	historyCmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "history-limit", "10000")
+	if err := t.cmdExec.Run(historyCmd); err != nil {
+		log.InfoLog.Printf("Warning: failed to set history-limit for session %s: %v", t.sanitizedName, err)
+	}
+
+	// Enable mouse scrolling for the session
+	mouseCmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "mouse", "on")
+	if err := t.cmdExec.Run(mouseCmd); err != nil {
+		log.InfoLog.Printf("Warning: failed to enable mouse scrolling for session %s: %v", t.sanitizedName, err)
+	}
 
 	err = t.Restore()
 	if err != nil {
@@ -139,27 +160,41 @@ func (t *TmuxSession) Start(workDir string) error {
 		return fmt.Errorf("error restoring tmux session: %w", err)
 	}
 
-	if t.program == ProgramClaude || strings.HasPrefix(t.program, ProgramAider) {
+	if strings.HasSuffix(t.program, ProgramClaude) || strings.HasSuffix(t.program, ProgramAider) || strings.HasSuffix(t.program, ProgramGemini) {
 		searchString := "Do you trust the files in this folder?"
 		tapFunc := t.TapEnter
-		iterations := 5
-		if t.program != ProgramClaude {
+		maxWaitTime := 30 * time.Second // Much longer timeout for slower systems
+		if !strings.HasSuffix(t.program, ProgramClaude) {
 			searchString = "Open documentation url for more info"
 			tapFunc = t.TapDAndEnter
-			iterations = 10 // Aider takes longer to start :/
+			maxWaitTime = 45 * time.Second // Aider/Gemini take longer to start
 		}
+
 		// Deal with "do you trust the files" screen by sending an enter keystroke.
-		for i := 0; i < iterations; i++ {
-			time.Sleep(200 * time.Millisecond)
+		// Use exponential backoff with longer timeout for reliability on slow systems
+		startTime := time.Now()
+		sleepDuration := 100 * time.Millisecond
+		attempt := 0
+
+		for time.Since(startTime) < maxWaitTime {
+			attempt++
+			time.Sleep(sleepDuration)
 			content, err := t.CapturePaneContent()
 			if err != nil {
-				log.ErrorLog.Printf("could not check 'do you trust the files screen': %v", err)
-			}
-			if strings.Contains(content, searchString) {
-				if err := tapFunc(); err != nil {
-					log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
+				// Session might not be ready yet, continue waiting
+			} else {
+				if strings.Contains(content, searchString) {
+					if err := tapFunc(); err != nil {
+						log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
+					}
+					break
 				}
-				break
+			}
+
+			// Exponential backoff with cap at 1 second
+			sleepDuration = time.Duration(float64(sleepDuration) * 1.2)
+			if sleepDuration > time.Second {
+				sleepDuration = time.Second
 			}
 		}
 	}
@@ -244,6 +279,8 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 		hasPrompt = strings.Contains(content, "No, and tell Claude what to do differently")
 	} else if strings.HasPrefix(t.program, ProgramAider) {
 		hasPrompt = strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
+	} else if strings.HasPrefix(t.program, ProgramGemini) {
+		hasPrompt = strings.Contains(content, "Yes, allow once")
 	}
 
 	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {
@@ -328,6 +365,47 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 
 	t.monitorWindowSize()
 	return t.attachCh, nil
+}
+
+// DetachSafely disconnects from the current tmux session without panicking
+func (t *TmuxSession) DetachSafely() error {
+	// Only detach if we're actually attached
+	if t.attachCh == nil {
+		return nil // Already detached
+	}
+
+	var errs []error
+
+	// Close the attached pty session.
+	if t.ptmx != nil {
+		if err := t.ptmx.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("error closing attach pty session: %w", err))
+		}
+		t.ptmx = nil
+	}
+
+	// Clean up attach state
+	if t.attachCh != nil {
+		close(t.attachCh)
+		t.attachCh = nil
+	}
+
+	if t.cancel != nil {
+		t.cancel()
+		t.cancel = nil
+	}
+
+	if t.wg != nil {
+		t.wg.Wait()
+		t.wg = nil
+	}
+
+	t.ctx = nil
+
+	if len(errs) > 0 {
+		return fmt.Errorf("errors during detach: %v", errs)
+	}
+	return nil
 }
 
 // Detach disconnects from the current tmux session. It panics if detaching fails. At the moment, there's no

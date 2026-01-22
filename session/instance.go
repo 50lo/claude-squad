@@ -192,7 +192,14 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
-	tmuxSession := tmux.NewTmuxSession(i.Title, i.Program)
+	var tmuxSession *tmux.TmuxSession
+	if i.tmuxSession != nil {
+		// Use existing tmux session (useful for testing)
+		tmuxSession = i.tmuxSession
+	} else {
+		// Create new tmux session
+		tmuxSession = tmux.NewTmuxSession(i.Title, i.Program)
+	}
 	i.tmuxSession = tmuxSession
 
 	if firstTimeSetup {
@@ -295,14 +302,6 @@ func (i *Instance) combineErrors(errs []error) error {
 	return fmt.Errorf("%s", errMsg)
 }
 
-// Close is an alias for Kill to maintain backward compatibility
-func (i *Instance) Close() error {
-	if !i.started {
-		return fmt.Errorf("cannot close instance that has not been started")
-	}
-	return i.Kill()
-}
-
 func (i *Instance) Preview() (string, error) {
 	if !i.started || i.Status == Paused {
 		return "", nil
@@ -389,9 +388,9 @@ func (i *Instance) Pause() error {
 		errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
 		log.ErrorLog.Print(err)
 	} else if dirty {
-		// Commit changes with timestamp
+		// Commit changes locally (without pushing to GitHub)
 		commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
-		if err := i.gitWorktree.PushChanges(commitMsg, false); err != nil {
+		if err := i.gitWorktree.CommitChanges(commitMsg); err != nil {
 			errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
 			log.ErrorLog.Print(err)
 			// Return early if we can't commit changes to avoid corrupted state
@@ -399,12 +398,11 @@ func (i *Instance) Pause() error {
 		}
 	}
 
-	// Close tmux session first since it's using the git worktree
-	if err := i.tmuxSession.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("failed to close tmux session: %w", err))
+	// Detach from tmux session instead of closing to preserve session output
+	if err := i.tmuxSession.DetachSafely(); err != nil {
+		errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", err))
 		log.ErrorLog.Print(err)
-		// Return early if we can't close tmux to avoid corrupted state
-		return i.combineErrors(errs)
+		// Continue with pause process even if detach fails
 	}
 
 	// Check if worktree exists before trying to remove it
@@ -457,15 +455,33 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("failed to setup git worktree: %w", err)
 	}
 
-	// Create new tmux session
-	if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
-		log.ErrorLog.Print(err)
-		// Cleanup git worktree if tmux session creation fails
-		if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
-			err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+	// Check if tmux session still exists from pause, otherwise create new one
+	if i.tmuxSession.DoesSessionExist() {
+		// Session exists, just restore PTY connection to it
+		if err := i.tmuxSession.Restore(); err != nil {
 			log.ErrorLog.Print(err)
+			// If restore fails, fall back to creating new session
+			if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+				log.ErrorLog.Print(err)
+				// Cleanup git worktree if tmux session creation fails
+				if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
+					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+					log.ErrorLog.Print(err)
+				}
+				return fmt.Errorf("failed to start new session: %w", err)
+			}
 		}
-		return fmt.Errorf("failed to start new session: %w", err)
+	} else {
+		// Create new tmux session
+		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+			log.ErrorLog.Print(err)
+			// Cleanup git worktree if tmux session creation fails
+			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
+				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+				log.ErrorLog.Print(err)
+			}
+			return fmt.Errorf("failed to start new session: %w", err)
+		}
 	}
 
 	i.SetStatus(Running)
@@ -522,4 +538,25 @@ func (i *Instance) SendPrompt(prompt string) error {
 	}
 
 	return nil
+}
+
+// PreviewFullHistory captures the entire tmux pane output including full scrollback history
+func (i *Instance) PreviewFullHistory() (string, error) {
+	if !i.started || i.Status == Paused {
+		return "", nil
+	}
+	return i.tmuxSession.CapturePaneContentWithOptions("-", "-")
+}
+
+// SetTmuxSession sets the tmux session for testing purposes
+func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
+	i.tmuxSession = session
+}
+
+// SendKeys sends keys to the tmux session
+func (i *Instance) SendKeys(keys string) error {
+	if !i.started || i.Status == Paused {
+		return fmt.Errorf("cannot send keys to instance that has not been started or is paused")
+	}
+	return i.tmuxSession.SendKeys(keys)
 }

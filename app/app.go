@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 )
 
 const GlobalInstanceLimit = 10
@@ -220,16 +221,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickUpdateMetadataCmd
 	case tea.MouseMsg:
-		// Handle mouse wheel scrolling in the diff view
-		if m.tabbedWindow.IsInDiffTab() {
-			if msg.Action == tea.MouseActionPress {
+		// Handle mouse wheel events for scrolling the diff/preview pane
+		if msg.Action == tea.MouseActionPress {
+			if msg.Button == tea.MouseButtonWheelDown || msg.Button == tea.MouseButtonWheelUp {
+				selected := m.list.GetSelectedInstance()
+				if selected == nil || selected.Status == session.Paused {
+					return m, nil
+				}
+
 				switch msg.Button {
 				case tea.MouseButtonWheelUp:
 					m.tabbedWindow.ScrollUp()
-					return m, m.instanceChanged()
 				case tea.MouseButtonWheelDown:
 					m.tabbedWindow.ScrollDown()
-					return m, m.instanceChanged()
 				}
 			}
 		}
@@ -352,22 +356,23 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				m.promptAfterName = false
 			} else {
 				m.menu.SetState(ui.StateDefault)
-				m.showHelpScreen(helpTypeInstanceStart, nil)
+				m.showHelpScreen(helpStart(instance), nil)
 			}
 
 			return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 		case tea.KeyRunes:
-			if len(instance.Title) >= 32 {
+			if runewidth.StringWidth(instance.Title) >= 32 {
 				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
 			}
 			if err := instance.SetTitle(instance.Title + string(msg.Runes)); err != nil {
 				return m, m.handleError(err)
 			}
 		case tea.KeyBackspace:
-			if len(instance.Title) == 0 {
+			runes := []rune(instance.Title)
+			if len(runes) == 0 {
 				return m, nil
 			}
-			if err := instance.SetTitle(instance.Title[:len(instance.Title)-1]); err != nil {
+			if err := instance.SetTitle(string(runes[:len(runes)-1])); err != nil {
 				return m, m.handleError(err)
 			}
 		case tea.KeySpace:
@@ -395,13 +400,14 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		// Check if the form was submitted or canceled
 		if shouldClose {
+			selected := m.list.GetSelectedInstance()
+			// TODO: this should never happen since we set the instance in the previous state.
+			if selected == nil {
+				return m, nil
+			}
 			if m.textInputOverlay.IsSubmitted() {
-				// Form was submitted, process the input
-				selected := m.list.GetSelectedInstance()
-				if selected == nil {
-					return m, nil
-				}
 				if err := selected.SendPrompt(m.textInputOverlay.GetValue()); err != nil {
+					// TODO: we probably end up in a bad state here.
 					return m, m.handleError(err)
 				}
 			}
@@ -413,7 +419,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 				tea.WindowSize(),
 				func() tea.Msg {
 					m.menu.SetState(ui.StateDefault)
-					m.showHelpScreen(helpTypeInstanceStart, nil)
+					m.showHelpScreen(helpStart(selected), nil)
 					return nil
 				},
 			)
@@ -433,6 +439,22 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Exit scrolling mode when ESC is pressed and preview pane is in scrolling mode
+	// Check if Escape key was pressed and we're not in the diff tab (meaning we're in preview tab)
+	// Always check for escape key first to ensure it doesn't get intercepted elsewhere
+	if msg.Type == tea.KeyEsc {
+		// If in preview tab and in scroll mode, exit scroll mode
+		if !m.tabbedWindow.IsInDiffTab() && m.tabbedWindow.IsPreviewInScrollMode() {
+			// Use the selected instance from the list
+			selected := m.list.GetSelectedInstance()
+			err := m.tabbedWindow.ResetPreviewToNormalMode(selected)
+			if err != nil {
+				return m, m.handleError(err)
+			}
+			return m, m.instanceChanged()
+		}
+	}
+
 	// Handle quit commands first
 	if msg.String() == "ctrl+c" || msg.String() == "q" {
 		return m.handleQuit()
@@ -445,7 +467,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 	switch name {
 	case keys.KeyHelp:
-		return m.showHelpScreen(helpTypeGeneral, nil)
+		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
@@ -494,14 +516,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		m.list.Down()
 		return m, m.instanceChanged()
 	case keys.KeyShiftUp:
-		if m.tabbedWindow.IsInDiffTab() {
-			m.tabbedWindow.ScrollUp()
-		}
+		m.tabbedWindow.ScrollUp()
 		return m, m.instanceChanged()
 	case keys.KeyShiftDown:
-		if m.tabbedWindow.IsInDiffTab() {
-			m.tabbedWindow.ScrollDown()
-		}
+		m.tabbedWindow.ScrollDown()
 		return m, m.instanceChanged()
 	case keys.KeyTab:
 		m.tabbedWindow.Toggle()
@@ -573,7 +591,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 
 		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout, func() {
+		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
 			if err := selected.Pause(); err != nil {
 				m.handleError(err)
 			}
@@ -598,7 +616,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		// Show help screen before attaching
-		m.showHelpScreen(helpTypeInstanceAttach, func() {
+		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
 			ch, err := m.list.Attach()
 			if err != nil {
 				m.handleError(err)
@@ -620,6 +638,7 @@ func (m *home) instanceChanged() tea.Cmd {
 	selected := m.list.GetSelectedInstance()
 
 	m.tabbedWindow.UpdateDiff(selected)
+	m.tabbedWindow.SetInstance(selected)
 	// Update menu with current instance
 	m.menu.SetInstance(selected)
 
