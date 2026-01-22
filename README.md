@@ -1,6 +1,6 @@
 # Claude Squad [![CI](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml/badge.svg)](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/smtg-ai/claude-squad)](https://github.com/smtg-ai/claude-squad/releases/latest)
 
-[Claude Squad](https://smtg-ai.github.io/claude-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
+[Claude Squad](https://smtg-ai.github.io/claude-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
 
 
 ![Claude Squad Screenshot](assets/screenshot.png)
@@ -74,6 +74,7 @@ Run the application with:
 ```bash
 cs
 ```
+NOTE: The default program is `claude` and we recommend using the latest version.
 
 <br />
 
@@ -82,6 +83,7 @@ cs
 - Launch with specific assistants:
    - Codex: `cs -p "codex"`
    - Aider: `cs -p "aider ..."`
+   - Gemini: `cs -p "gemini"`
 - Make this the default, by modifying the config file (locate with `cs debug`)
 
 <br />
@@ -107,6 +109,13 @@ The menu at the bottom of the screen shows available commands:
 - `tab` - Switch between preview tab and diff tab
 - `q` - Quit the application
 - `shift-↓/↑` - scroll in diff view
+
+### FAQs
+
+#### Failed to start new session
+
+If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
+underlying program (ex. `claude`) to the latest version.
 
 ### How It Works
 
